@@ -1,0 +1,131 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r}
+#Importando a biblioteca
+
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(httr)
+library(geobr)
+library(svglite)
+```
+
+```{r}
+#Lendo a tabela com os resultados obtidos para UTI mais próxima de casa município
+dist <- fread("mapeamento_google_ajustado.csv")
+head(dist)
+
+#Cria colunas para distância em km 
+dist <- dist %>% mutate(distancia_km = distancia/1000, tempo_minutos = tempo/60)
+
+#Arredondando os valores obtidos para para distância e tempo de viagem
+dist$distancia_km <- round(dist$distancia_km, 0)
+dist$tempo_minutos <- round(dist$tempo_minutos,0)
+dist$tempo_minutos <- as.integer(dist$tempo_minutos)
+
+#Juntando com tabela com nome dos municípios (origem) e população (IMPORTANTE, CÓDIGO DE 7 DIGITOS DO IBGE!!!)
+pop <- fread("populacao_2019.csv", encoding = "Latin-1")
+dist <- left_join(dist, pop, by = c("origem" = "city_ibge_6"))
+
+#ggplot(dist, aes(tempo_minutos, estimated_population)) + geom_point()
+
+```
+
+```{r}
+#Vamos ver a população que demora mais de duas horas para chegar no leito
+nrow(dist[dist$tempo_minutos >= 120, ])
+sum(dist$estimated_population[which(dist$tempo_minutos >= 120)])
+
+#Filtrando e criando a região, a partir do codigo 
+dist$region <- dist$origem
+dist$region <- substr(dist$region, 1, 1)
+
+```
+
+
+```{r}
+#Importando para o mapa
+no_axis <- theme(axis.title=element_blank(),
+                 axis.text=element_blank(),
+                 axis.ticks=element_blank())
+
+#Importa a base municipal e estadual do IBGE, a partir do Geobr
+munic <- read_municipality(code_muni="all", year=2017)
+state <- read_state(code_state="all", year=2017)
+
+#Junta com a tabela para o mapa
+mapa <- right_join(munic, dist, by = c("code_muni" = "city_ibge_code"))
+
+#Cria um conjunto de cores para legenda
+cores <- c("#f6e6b5", "#ecc082", "#e4a268", "#d56734", "#ce491a", "#9b3714", "#872604")
+
+#Cria uma coluna de categoria de tempo para fazermos o levantamento
+mapa$cat_tempo <- cut(mapa$tempo_minutos, 
+                          breaks = c(0, 1, 30, 60, 90, 120, Inf),
+                          include.lowest = TRUE, 
+                          right = FALSE,
+                          c("0 minutos", "Até 30 min","Entre 30 e 60 min", "Entre 60 e 90 min", "Entre 90 e 120 minutos", "Mais que 120 minutos"))
+
+#Transforma a coluna cat_tempo em chr e adiciona o "Sem Rota" onde estão os NA
+mapa$cat_tempo <- as.character(mapa$cat_tempo)
+mapa$cat_tempo[is.na(mapa$cat_tempo)] <- "Sem rota"
+
+
+#Plotando o gráfico que queremos
+map_saude <- ggplot() +
+  geom_sf(data = mapa, 
+          aes(fill = cat_tempo), 
+          color= NA, 
+          size=.0001) +
+  scale_fill_manual(values = cores) + #scale_fill_brewer(direction = 1) 
+  theme_void() +
+  no_axis + geom_sf(data=state, fill=NA, color="#151414")
+map_saude
+
+#Salva em SVG
+ggsave(file="mapa_covid.svg", plot=map_saude, width=10, height=8)
+
+```
+
+```{r}
+#Cria uma df para regiões, a partir da dist e repete todos os passos necessários para isso
+
+nordeste_norte <- dist %>% filter (region == 1 | region == 2)
+
+mapa_exluidos <- right_join(munic, nordeste_norte, by = c("code_muni" = "city_ibge_code"))
+
+mapa_exluidos$cat_tempo <- cut(mapa_exluidos$tempo_minutos, 
+                          breaks = c(0, 1, 30, 60, 90, 120, Inf),
+                          include.lowest = TRUE, 
+                          right = FALSE,
+                          c("0 minutos", "Até 30 min","Entre 30 e 60 min", "Entre 60 e 90 min", "Entre 90 e 120 minutos", "Mais que 120 minutos"))
+
+mapa_exluidos$cat_tempo <- as.character(mapa_exluidos$cat_tempo)
+mapa_exluidos$cat_tempo[is.na(mapa_exluidos$cat_tempo)] <- "Sem rota"
+
+state_su <- state %>% filter (code_region == 3 | code_region == 4)
+state_no <- state %>% filter (code_region == 1 | code_region == 2)
+
+mapa_no <- ggplot() +
+  geom_sf(data = mapa_exluidos,
+          aes(fill = cat_tempo), 
+          color= NA, 
+          size=.0001) +
+  scale_fill_manual(values = cores) + #scale_fill_brewer(direction = 1) 
+  theme_void() + 
+  geom_sf(data=state_no, fill=NA, color="#151414") +
+  no_axis
+  
+ggsave(file="mapa_no.svg", plot=mapa_no, dpi=5, width = 25, height = 15)
+
+map_saude
+```
+
+
